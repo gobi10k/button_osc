@@ -32,6 +32,7 @@ import RPi.GPIO as GPIO
 from pythonosc import udp_client
 import netifaces as ni
 import socket
+import time
 
 # --- Configuration ---
 BUTTON_PIN = 15
@@ -39,21 +40,19 @@ OSC_PORT = 8000
 OSC_ADDRESS = "/button/press"
 
 def get_ip_address():
-    interfaces = ni.interfaces()
-    for interface in interfaces:
-        if interface.startswith('eth') or interface.startswith('wlan'):
-            try:
-                ip = ni.ifaddresses(interface)[ni.AF_INET][0]['addr']
-                return ip
-            except (KeyError, IndexError):
-                continue
-    return None
+    while True:
+        interfaces = ni.interfaces()
+        for interface in interfaces:
+            if interface.startswith('eth') or interface.startswith('wlan'):
+                try:
+                    ip = ni.ifaddresses(interface)[ni.AF_INET][0]['addr']
+                    return ip
+                except (KeyError, IndexError):
+                    continue
+        time.sleep(1)
+
 
 ip_address = get_ip_address()
-if not ip_address:
-    print("Error: Could not find a valid network interface.")
-    exit()
-
 print(f"Found IP address: {ip_address}")
 
 # --- OSC Client Setup ---
@@ -103,11 +102,6 @@ echo -e "\n🚀 CREATING LAUNCH SCRIPT"
 mkdir -p "$LOG_DIR"
 cat > "$LAUNCH_SCRIPT" <<EOL
 #!/bin/bash
-export DISPLAY=:0
-export XAUTHORITY=$HOME_DIR/.Xauthority
-LOG_DIR="$LOG_DIR"
-mkdir -p "\$LOG_DIR"
-exec > >(tee -a "\$LOG_DIR/runtime.log") 2>&1
 source "$VENV_DIR/bin/activate"
 python "$SCRIPT_PATH"
 EOL
@@ -119,7 +113,8 @@ echo -e "\n🛠️ CREATING SYSTEMD SERVICE"
 sudo bash -c "cat > $SERVICE_PATH" <<EOL
 [Unit]
 Description=OSC Button Broadcaster
-After=graphical.target
+Wants=graphical-session.target
+After=graphical-session.target
 
 [Service]
 User=$USERNAME
@@ -132,33 +127,20 @@ Restart=on-failure
 RestartSec=5s
 
 [Install]
-WantedBy=graphical.target
+WantedBy=graphical-session.target
 EOL
 
-# === 7. Setup Autostart ===
-echo -e "\n🖥️ CONFIGURING AUTOSTART"
-mkdir -p "$HOME_DIR/.config/autostart"
-cat > "$HOME_DIR/.config/autostart/osc-broadcaster.desktop" <<EOL
-[Desktop Entry]
-Type=Application
-Name=OSC Broadcaster
-Comment=OSC Button Broadcaster GUI
-Exec=bash -c 'source $HOME_DIR/osc_env/bin/activate && $LAUNCH_SCRIPT'
-Hidden=false
-X-GNOME-Autostart-enabled=true
-EOL
-
-# === 8. Enable and Start Service ===
+# === 7. Enable and Start Service ===
 echo -e "\n🚀 STARTING SERVICES"
 sudo systemctl daemon-reload
 sudo systemctl enable --now osc_button.service
 
-# === 9. Create Diagnostic Tools ===
+# === 8. Create Diagnostic Tools ===
 echo -e "\n🛠️ CREATING DIAGNOSTIC TOOLS"
 cat > "$HOME_DIR/check_osc.sh" <<'EOL'
 #!/bin/bash
 echo "=== Service Status ==="
-systemctl status osc_button.service --no-pager
+systemctl --user status osc_button.service --no-pager
 
 echo -e "\n=== GPIO Status ==="
 ls -l /dev/gpiomem 2>/dev/null || echo "GPIO device not found"
@@ -173,11 +155,8 @@ EOL
 
 chmod +x "$HOME_DIR/check_osc.sh"
 
-# === 10. Final Steps ===
+# === 9. Final Steps ===
 echo -e "\n✅ SETUP COMPLETE"
-echo "The system will now reboot to apply all changes."
-echo "After reboot, the OSC broadcaster will start automatically."
+echo "Please reboot your Raspberry Pi to apply all changes."
+echo "After reboot, the OSC broadcaster should start automatically."
 echo "To check the status, run './check_osc.sh' from your home directory."
-
-# Reboot to apply group changes and start the service
-sudo reboot
